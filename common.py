@@ -112,3 +112,34 @@ def clac_loss_dqn(batch, net, tgt_net, gamma, device=torch.device('cpu')):
     bellman_vals = next_state_vals.detach() * gamma + rewards_v
     return nn.MSELoss()(state_action_vals, bellman_vals)
 
+
+class EpsilonTracker:
+    def __init__(self, selector: ptan.actions.EpsilonGreedyActionSelector,
+                 params: SimpleNamespace):
+        self.selector = selector
+        self.params = params
+        self.frame(0)
+
+    def frame(self, frame_idx: int):
+        eps = self.params.epsilon_start - frame_idx / self.params.epsilon_frames
+        self.selector.epsilon = max(self.params.epsilon_final, eps)
+
+
+def batch_generator(buffer: ptan.experience.ExperienceReplayBuffer,
+                    initial: int, batch_size: int):
+    buffer.populate(initial)
+    while True:
+        buffer.populate(1)
+        yield buffer.sample(batch_size)
+
+
+def setup_ignite(engine: Engine, params: SimpleNamespace,
+                 exp_source, run_name: str,
+                 extra_metrics: Iterable[str] = ()):
+    warnings.simplefilter("ignore", category=UserWarning)
+
+    handler = ptan_ignite.EndOfEpisodeHandler(
+        exp_source, bound_avg_reward=params.stop_reward)
+
+    handler.attach(engine)
+    ptan_ignite.EpisodeFPSHandler().attach(engine)
