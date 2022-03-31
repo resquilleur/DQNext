@@ -12,51 +12,50 @@ from ignite.engine import Engine
 from ignite.metrics import RunningAverage
 from ignite.contrib.handlers import tensorboard_logger as tb_logger
 
-
 SEED = 123
 
 HYPERPARAMS = {
     'pong': SimpleNamespace(**{
-        'env_name':         "PongNoFrameskip-v4",
-        'stop_reward':      18.0,
-        'run_name':         'pong',
-        'replay_size':      100000,
-        'replay_initial':   10000,
-        'target_net_sync':  1000,
-        'epsilon_frames':   10**5,
-        'epsilon_start':    1.0,
-        'epsilon_final':    0.02,
-        'learning_rate':    0.0001,
-        'gamma':            0.99,
-        'batch_size':       32
+        'env_name': "PongNoFrameskip-v4",
+        'stop_reward': 18.0,
+        'run_name': 'pong',
+        'replay_size': 100000,
+        'replay_initial': 10000,
+        'target_net_sync': 1000,
+        'epsilon_frames': 10 ** 5,
+        'epsilon_start': 1.0,
+        'epsilon_final': 0.02,
+        'learning_rate': 0.0001,
+        'gamma': 0.99,
+        'batch_size': 32
     }),
     'breakout-small': SimpleNamespace(**{
-        'env_name':         "BreakoutNoFrameskip-v4",
-        'stop_reward':      500.0,
-        'run_name':         'breakout-small',
-        'replay_size':      3*10 ** 5,
-        'replay_initial':   20000,
-        'target_net_sync':  1000,
-        'epsilon_frames':   10 ** 6,
-        'epsilon_start':    1.0,
-        'epsilon_final':    0.1,
-        'learning_rate':    0.0001,
-        'gamma':            0.99,
-        'batch_size':       64
+        'env_name': "BreakoutNoFrameskip-v4",
+        'stop_reward': 500.0,
+        'run_name': 'breakout-small',
+        'replay_size': 3 * 10 ** 5,
+        'replay_initial': 20000,
+        'target_net_sync': 1000,
+        'epsilon_frames': 10 ** 6,
+        'epsilon_start': 1.0,
+        'epsilon_final': 0.1,
+        'learning_rate': 0.0001,
+        'gamma': 0.99,
+        'batch_size': 64
     }),
     'breakout': SimpleNamespace(**{
-        'env_name':         "BreakoutNoFrameskip-v4",
-        'stop_reward':      500.0,
-        'run_name':         'breakout',
-        'replay_size':      10 ** 6,
-        'replay_initial':   50000,
-        'target_net_sync':  10000,
-        'epsilon_frames':   10 ** 6,
-        'epsilon_start':    1.0,
-        'epsilon_final':    0.1,
-        'learning_rate':    0.00025,
-        'gamma':            0.99,
-        'batch_size':       32
+        'env_name': "BreakoutNoFrameskip-v4",
+        'stop_reward': 500.0,
+        'run_name': 'breakout',
+        'replay_size': 10 ** 6,
+        'replay_initial': 50000,
+        'target_net_sync': 10000,
+        'epsilon_frames': 10 ** 6,
+        'epsilon_start': 1.0,
+        'epsilon_final': 0.1,
+        'learning_rate': 0.00025,
+        'gamma': 0.99,
+        'batch_size': 32
     }),
     'invaders': SimpleNamespace(**{
         'env_name': "SpaceInvadersNoFrameskip-v4",
@@ -92,6 +91,7 @@ def unpack_batch(batch: List[ptan.experience.ExperienceFirstLast]):
     return np.array(states, copy=False), np.array(actions), + \
         np.array(rewards, dtype=np.float32), np.array(dones, dtype=np.uint8), + \
         np.array(last_states, copy=False)
+
 
 def clac_loss_dqn(batch, net, tgt_net, gamma, device=torch.device('cpu')):
     states, actions, rewards, dones, next_states = unpack_batch(batch)
@@ -133,6 +133,17 @@ def batch_generator(buffer: ptan.experience.ExperienceReplayBuffer,
         yield buffer.sample(batch_size)
 
 
+@torch.no_grad()
+def calc_values_of_states(states, net, device="cpu"):
+    mean_vals = []
+    for batch in np.array_split(states, 64):
+        states_v = torch.tensor(batch).to(device)
+        action_values_v = net(states_v)
+        best_action_values_v = action_values_v.max(1)[0]
+        mean_vals.append(best_action_values_v.mean().item())
+    return np.mean(mean_vals)
+
+
 def setup_ignite(engine: Engine, params: SimpleNamespace,
                  exp_source, run_name: str,
                  extra_metrics: Iterable[str] = ()):
@@ -143,3 +154,44 @@ def setup_ignite(engine: Engine, params: SimpleNamespace,
 
     handler.attach(engine)
     ptan_ignite.EpisodeFPSHandler().attach(engine)
+
+    @engine.on(ptan_ignite.EpisodeEvents.EPISODE_COMPLETED)
+    def episode_completed(trainer: Engine):
+        passed = trainer.state.metrics.get('time_passed', 0)
+        print("Episode %d: reward=%.0f, steps=%s, "
+              "speed=%.1f f/s, elapsed=%s" % (
+                  trainer.state.episode, trainer.state.episode_reward,
+                  trainer.state.episode_steps,
+                  trainer.state.metrics.get('avg_fps', 0),
+                  timedelta(seconds=int(passed))))
+
+    @engine.on(ptan_ignite.EpisodeEvents.BOUND_REWARD_REACHED)
+    def game_solved(trainer: Engine):
+        passed = trainer.state.metrics['time_passed']
+        print("Game solved in %s, after %d episodes "
+              "and %d iterations!" % (
+                  timedelta(seconds=int(passed)),
+                  trainer.state.episode, trainer.state.iteration))
+        trainer.should_terminate = True
+
+    now = datetime.now().isoformat(timespec='minutes').replace(':', '')
+    logdir = f"runs/{now}-{params.run_name}-{run_name}"
+    tb = tb_logger.TensorboardLogger(log_dir=logdir)
+    run_avg = RunningAverage(output_transform=lambda v: v['loss'])
+    run_avg.attach(engine, "avg_loss")
+
+    metrics = ['reward', 'steps', 'avg_reward']
+    handler = tb_logger.OutputHandler(
+        tag="episodes", metric_names=metrics
+    )
+    event = ptan_ignite.EpisodeEvents.EPISODE_COMPLETED
+    tb.attach(engine, log_handler=handler, event_name=event)
+
+    ptan_ignite.PeriodicEvents().attach(engine)
+    metrics.extend(extra_metrics)
+    handler = tb_logger.OutputHandler(
+        tag="train", metric_names=metrics,
+        output_transform=lambda a: a
+    )
+    event = ptan_ignite.PeriodEvents.ITERS_100_COMPLETED
+    tb.attach(engine, log_handler=handler, event_name=event)
