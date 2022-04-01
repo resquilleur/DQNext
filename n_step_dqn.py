@@ -10,9 +10,8 @@ from ignite.engine import Engine
 import common
 from dqn_model import DQN
 
-NAME = "combined_ext"
+NAME = "02_n_steps"
 DEFAULT_N_STEPS = 3
-PRIO_REPLAY_ALPHA = 0.6
 
 if __name__ == "__main__":
     random.seed(common.SEED)
@@ -20,6 +19,8 @@ if __name__ == "__main__":
     params = common.HYPERPARAMS['pong']
     parser = argparse.ArgumentParser()
     parser.add_argument("--cuda", default=False, action="store_true", help="Enable cuda")
+    parser.add_argument("-n", type=int, default=DEFAULT_N_STEPS,
+                        help="Steps to do on Bellman unroll")
     args = parser.parse_args()
     device = torch.device("cuda" if args.cuda else "cpu")
 
