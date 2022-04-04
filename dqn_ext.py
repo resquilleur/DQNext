@@ -8,11 +8,12 @@ import torch.optim as optim
 
 from ignite.engine import Engine
 import common
-from dqn_model import DQN
+from dqn_model import RainbowDQN, PrioReplayBuffer
 
 NAME = "combined_ext"
-DEFAULT_N_STEPS = 3
+N_STEPS = 4
 PRIO_REPLAY_ALPHA = 0.6
+
 
 if __name__ == "__main__":
     random.seed(common.SEED)
@@ -27,40 +28,39 @@ if __name__ == "__main__":
     env = ptan.common.wrappers.wrap_dqn(env)
     env.seed(common.SEED)
 
-    net = DQN(env.observation_space.shape, env.action_space.n).to(device)
+    net = RainbowDQN(env.observation_space.shape, env.action_space.n).to(device)
 
     tgt_net = ptan.agent.TargetNet(net)
-    selector = ptan.actions.EpsilonGreedyActionSelector(epsilon=params.epsilon_start)
-    epsilon_tracker = common.EpsilonTracker(selector, params)
+    selector = ptan.actions.ArgmaxActionSelector()
     agent = ptan.agent.DQNAgent(net, selector, device=device)
 
     exp_source = ptan.experience.ExperienceSourceFirstLast(env, agent,
                                                            gamma=params.gamma,
-                                                           steps_count=args.n)
-    buffer = ptan.experience.ExperienceReplayBuffer(exp_source, buffer_size=params.replay_size)
+                                                           steps_count=N_STEPS)
+    buffer = PrioReplayBuffer(exp_source, params.replay_size, PRIO_REPLAY_ALPHA)
     optimizer = optim.Adam(net.parameters(), lr=params.learning_rate)
 
-    def process_batch(engine, batch):
+    def process_batch(engine, batch_data):
+        batch, batch_indices, batch_weights = batch_data
         optimizer.zero_grad()
-        # made an additional variable, because in the original training falls
-        gamm = params.gamma**args.n
-        loss_v = common.clac_loss_dqn(batch, net, tgt_net.target_model,
-                                      gamma=gamm,
-                                      device=device)
+        loss_v, sample_prios = common.calc_loss_prio(batch, batch_weights,
+                                                     net, tgt_net.target_model,
+                                                     gamma=params.gamma**N_STEPS,
+                                                     device=device)
         loss_v.backward()
         optimizer.step()
-        epsilon_tracker.frame(engine.state.iteration)
+        buffer.update_priorities(batch_indices, sample_prios)
         if engine.state.iteration % params.target_net_sync == 0:
             tgt_net.sync()
         return {
             "loss": loss_v.item(),
-            "epsilon": selector.epsilon,
+            "beta": buffer.update_beta(engine.state.iteration),
         }
 
     engine = Engine(process_batch)
-    common.setup_ignite(engine, params, exp_source, f"{NAME}={args.n}")
-    engine.run(common.batch_generator(buffer, params.replay_initial,
-                                      params.batch_size))
+    common.setup_ignite(engine, params, exp_source, NAME)
+    engine.run(common.batch_generator(buffer, params.replay_initial, params.batch_size))
+
 
 
 
