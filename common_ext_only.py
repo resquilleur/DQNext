@@ -126,10 +126,10 @@ class EpsilonTracker:
 
 
 def batch_generator(buffer: ptan.experience.ExperienceReplayBuffer,
-                    initial: int, batch_size: int, steps: int):
+                    initial: int, batch_size: int):
     buffer.populate(initial)
     while True:
-        buffer.populate(steps)
+        buffer.populate(1)
         yield buffer.sample(batch_size)
 
 
@@ -145,16 +145,15 @@ def calc_values_of_states(states, net, device="cpu"):
 
 
 def setup_ignite(engine: Engine, params: SimpleNamespace,
-                 exp_source, run_name: str, n_envs: int,
+                 exp_source, run_name: str,
                  extra_metrics: Iterable[str] = ()):
-
-    warnings.simplefilter("ignore", category=UserWarning,)
+    warnings.simplefilter("ignore", category=UserWarning)
 
     handler = ptan_ignite.EndOfEpisodeHandler(
         exp_source, bound_avg_reward=params.stop_reward)
 
     handler.attach(engine)
-    ptan_ignite.EpisodeFPSHandler(fps_mul=n_envs).attach(engine)
+    ptan_ignite.EpisodeFPSHandler().attach(engine)
 
     @engine.on(ptan_ignite.EpisodeEvents.EPISODE_COMPLETED)
     def episode_completed(trainer: Engine):

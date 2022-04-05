@@ -7,7 +7,7 @@ import torch
 import torch.optim as optim
 
 from ignite.engine import Engine
-import common
+import common_ext_only as common
 from dqn_model import RainbowDQN, PrioReplayBuffer
 
 NAME = "combined_ext"
