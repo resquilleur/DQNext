@@ -1,3 +1,5 @@
+import collections
+
 import gym
 import ptan.ptan as ptan
 import argparse
@@ -11,9 +13,29 @@ from ignite.engine import Engine
 import common
 from dqn_model import RainbowDQN, PrioReplayBuffer
 
-NAME = "combined_ext_parallel"
+NAME = "combined_ext_speed_parallel"
 N_STEPS = 4
 PRIO_REPLAY_ALPHA = 0.6
+BATCH_MUL = 4
+
+EpisodeEnded = collections.namedtuple('EpisodeEnded', field_names=('reward', 'steps'))
+
+
+def play_func(params, net, cuda, exp_queue):
+    env = gym.make(params.env_name)
+    env = ptan.common.wrappers.wrap_dqn(env)
+    env.seed(common.SEED)
+    device = torch.device("cuda" if cuda else "cpu")
+
+    selector = ptan.actions.ArgmaxActionSelector()
+    agent = ptan.agent.DQNAgent(net, selector, device=device)
+    exp_source = ptan.experience.ExperienceSourceFirstLast(envs, agent,
+                                                           gamma=params.gamma,
+                                                           steps_count=N_STEPS)
+    for frame_idx, exp in enumerate(exp_source):
+        exp_queue.put(exp)
+        for reward, steps in exp_source.pop_rewards_steps():
+            exp_queue.put(EpisodeEnded(reward, steps))
 
 
 if __name__ == "__main__":
